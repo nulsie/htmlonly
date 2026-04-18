@@ -43,20 +43,25 @@
     }
     
     async _isDevToolsOpen() {
-
+        // Trap 1: Execution pause (Works across all browsers)
         const start = performance.now();
         debugger; 
         const end = performance.now();
         if (end - start > 100) return true;
 
-
-        let detected = false;
-        const detector = {
-            toString: () => { detected = true; return 'detector'; }
-        };
-        console.log('%c', detector); 
+        // Trap 2: toString() evaluation (Only safe to run on Chromium-based browsers)
+        const isChromium = !!window.chrome;
+        if (isChromium) {
+            let detected = false;
+            const detector = {
+                toString: () => { detected = true; return 'detector'; }
+            };
+            console.log('%c', detector); 
+            return detected;
+        }
         
-        return detected;
+        // If not Chromium, rely only on the debugger trap
+        return false;
     }
     
     _applyNoise() {
@@ -328,7 +333,10 @@
         
         if (isMasked) {
             const unmaskedData = await this.unlockRawIPs();
-            if (unmaskedData) reconData = unmaskedData;
+            // VALIDATION FIX: Ensure the shield hasn't fed us a noise object before overwriting
+            if (unmaskedData && !unmaskedData.error && unmaskedData.rawCandidates) {
+                reconData = unmaskedData;
+            }
         }
         
 
